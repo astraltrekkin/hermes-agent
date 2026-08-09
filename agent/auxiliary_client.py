@@ -904,6 +904,8 @@ def _resolve_provider_vision_default(provider: str) -> Optional[str]:
 _PROVIDERS_WITHOUT_VISION: frozenset = frozenset({
     "kimi-coding",
     "kimi-coding-cn",
+    # ChatGPT Codex OAuth /responses rejects input_image with server_error (#82284).
+    "openai-codex",
 })
 
 # OpenRouter app attribution headers (base — always sent).

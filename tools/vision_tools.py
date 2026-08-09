@@ -942,8 +942,9 @@ def _supports_media_in_tool_results(provider: str, model: str) -> bool:
     if p in {"anthropic", "claude", "anthropic-direct"}:
         return True
 
-    # OpenAI Chat Completions and Responses
-    if p in {"openai", "openai-chat", "openai-codex", "azure-openai"}:
+    # OpenAI Chat Completions (and Azure OpenAI wire).  Codex Responses is
+    # excluded — the OAuth backend rejects image-bearing tool results (#82284).
+    if p in {"openai", "openai-chat", "azure-openai"}:
         return True
 
     # Gemini — gate on model name; older Gemini variants did not support

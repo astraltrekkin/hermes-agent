@@ -51,6 +51,18 @@ logger = logging.getLogger(__name__)
 
 _VALID_MODES = frozenset({"auto", "native", "text"})
 
+# Providers whose upstream endpoint rejects native ``input_image`` / ``image_url``
+# parts even when models.dev marks the model vision-capable.  The ChatGPT Codex
+# OAuth ``/backend-api/codex/responses`` route currently returns ``server_error``
+# on image-bearing requests while text-only turns succeed (#82284).
+#
+# Users can opt back into native routing with ``model.supports_vision: true``.
+_PROVIDERS_WITHOUT_NATIVE_VISION: frozenset[str] = frozenset({
+    "openai-codex",
+    "codex",
+    "openai_codex",
+})
+
 
 # Image extensions used by extract_image_refs(). Kept tight on purpose — we
 # only auto-attach things the model can actually see. Documents/archives are
@@ -427,6 +439,9 @@ def _lookup_supports_vision(
     )
     if override is not None:
         return override
+    provider_key = (provider or "").strip().lower()
+    if provider_key in _PROVIDERS_WITHOUT_NATIVE_VISION:
+        return False
     if not provider or not model:
         return None
     caps = None
