@@ -2223,7 +2223,12 @@ def _managed_response_meta(policy: ManagedFilesPolicy) -> Dict[str, Any]:
     }
 
 
-def _managed_file_entry(policy: ManagedFilesPolicy, target: Path) -> Dict[str, Any]:
+def _managed_file_entry(
+    policy: ManagedFilesPolicy,
+    target: Path,
+    *,
+    skip_unstatable: bool = False,
+) -> Dict[str, Any] | None:
     try:
         resolved = target.resolve()
     except (OSError, RuntimeError):
@@ -2234,6 +2239,8 @@ def _managed_file_entry(policy: ManagedFilesPolicy, target: Path) -> Dict[str, A
     try:
         st = resolved.stat()
     except OSError as exc:
+        if skip_unstatable:
+            return None
         raise HTTPException(status_code=500, detail=f"Could not stat path: {exc}")
 
     is_dir = resolved.is_dir()
@@ -2365,11 +2372,13 @@ async def list_managed_files(request: Request, path: Optional[str] = None):
         raise HTTPException(status_code=400, detail="Path is not a directory")
 
     try:
-        entries = [
-            _managed_file_entry(policy, child)
-            for child in target.iterdir()
-            if not _is_sensitive_path(child)
-        ]
+        entries = []
+        for child in target.iterdir():
+            if _is_sensitive_path(child):
+                continue
+            entry = _managed_file_entry(policy, child, skip_unstatable=True)
+            if entry is not None:
+                entries.append(entry)
     except PermissionError:
         raise HTTPException(status_code=403, detail="Directory is not readable")
     except OSError as exc:

@@ -193,6 +193,23 @@ def test_stream_upload_cleans_temp_on_cancellation(forced_files_client):
     assert leftovers == [], f"temp upload files leaked on cancellation: {leftovers}"
 
 
+def test_broken_symlink_skipped_from_listing(forced_files_client):
+    """Regression for #82420: broken symlinks must not 500 the whole listing."""
+    client, root = forced_files_client
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "good.txt").write_text("ok")
+    try:
+        (root / "broken_link").symlink_to(root / "nonexistent" / "steam")
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable in test environment: {exc}")
+
+    listing = client.get("/api/files", params={"path": str(root)})
+    assert listing.status_code == 200
+    names = [e["name"] for e in listing.json()["entries"]]
+    assert "good.txt" in names
+    assert "broken_link" not in names
+
+
 def test_sensitive_env_files_hidden_from_listing(forced_files_client):
     """Regression test for #57505: .env files must not appear in directory listings."""
     client, root = forced_files_client
