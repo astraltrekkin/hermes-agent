@@ -26199,7 +26199,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Use session_key (not source.chat_id) to match adapter's storage keys.
             pending_event = None
             pending = None
-            if result and adapter and session_key:
+            # During restart drain with queue/steer recovery enabled, follow-ups
+            # are acknowledged as queued for the replacement gateway.  Do not
+            # consume them here — adapter shutdown flush persists the slot for
+            # startup recovery (#82381).
+            _preserve_drain_queue = (
+                self._draining and self._queue_during_drain_enabled()
+            )
+            if result and adapter and session_key and not _preserve_drain_queue:
                 pending_event = _dequeue_pending_event(adapter, session_key)
                 # /queue overflow: after consuming the adapter's "next-up"
                 # slot, promote the next queued event into it so the
