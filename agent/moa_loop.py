@@ -638,6 +638,18 @@ _REFERENCE_DEFAULT_OUTPUT_RESERVE = 8192
 # transcripts, so keep a safety fraction of the window unbudgeted.
 _REFERENCE_TRIM_SAFETY_FRACTION = 0.10
 
+# CJK-dense transcripts often tokenize at ~1.2–1.25× the per-codepoint rough
+# estimate; scale before comparing to budget so trim fires before a provider
+# hard-rejects with HTTP 400 (#83784).
+_REFERENCE_ESTIMATE_SLACK = 1.25
+
+
+def _reference_estimated_tokens(messages: list[dict[str, Any]]) -> int:
+    """Conservative token estimate for MoA reference trim decisions."""
+    from agent.model_metadata import estimate_messages_tokens_rough
+
+    return int(estimate_messages_tokens_rough(messages) * _REFERENCE_ESTIMATE_SLACK)
+
 
 def _trim_messages_for_reference(
     messages: list[dict[str, Any]],
@@ -683,10 +695,7 @@ def _trim_messages_for_reference(
     if not messages:
         return messages
 
-    from agent.model_metadata import (
-        estimate_messages_tokens_rough,
-        get_model_context_length,
-    )
+    from agent.model_metadata import get_model_context_length
 
     model = str(slot.get("model") or "")
     provider = str(runtime.get("provider") or slot.get("provider") or "")
@@ -728,7 +737,7 @@ def _trim_messages_for_reference(
     if budget <= 0:
         return messages
 
-    estimated = estimate_messages_tokens_rough(messages)
+    estimated = _reference_estimated_tokens(messages)
     if estimated <= budget:
         return messages
 
@@ -737,7 +746,7 @@ def _trim_messages_for_reference(
     body = list(messages[1:] if has_system else messages)
 
     # Keep the trailing user turn plus at least one preceding turn.
-    while len(body) > 2 and estimate_messages_tokens_rough(head + body) > budget:
+    while len(body) > 2 and _reference_estimated_tokens(head + body) > budget:
         body.pop(0)
         # Preserve the user-first invariant: never leave the advisory
         # conversation starting on an assistant turn after a pop.

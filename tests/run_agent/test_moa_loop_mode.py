@@ -1227,6 +1227,29 @@ def test_reference_trim_caches_resolution_failures(monkeypatch):
     assert cache == {("openrouter", "small-window"): None}
 
 
+def _cjk_dense_advisory_view(n_pairs: int, *, chars_per_turn: int = 650) -> list[dict]:
+    """Advisory view with CJK-heavy turns (issue #83784 repro shape)."""
+    msgs = [{"role": "system", "content": "advisory system prompt"}]
+    for i in range(n_pairs):
+        msgs.append({"role": "user", "content": "ユーザー質問 " + ("日" * chars_per_turn)})
+        msgs.append({"role": "assistant", "content": "アシスタント回答 " + ("本" * chars_per_turn)})
+    msgs.append({"role": "user", "content": "judge the state above"})
+    return msgs
+
+
+def test_reference_trim_fires_for_cjk_dense_undercount(monkeypatch):
+    """Rough estimate can sit under budget while providers reject — trim anyway."""
+    from agent import moa_loop
+    from agent.model_metadata import estimate_messages_tokens_rough
+
+    msgs = _cjk_dense_advisory_view(163)
+    budget = int(256_000 * (1.0 - moa_loop._REFERENCE_TRIM_SAFETY_FRACTION)) - 8192
+    rough = estimate_messages_tokens_rough(msgs)
+    assert rough <= budget, "precondition: unfixed estimator sits under budget"
+
+    trimmed = _trim(list(msgs), window=256_000, monkeypatch=monkeypatch)
+    assert len(trimmed) < len(msgs)
+    assert moa_loop._reference_estimated_tokens(trimmed) <= budget
 
 
 def test_render_tool_calls_tolerates_namespace_shapes():
