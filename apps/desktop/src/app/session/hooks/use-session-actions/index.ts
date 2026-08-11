@@ -929,18 +929,42 @@ export function useSessionActions({
         // keeps it from surfacing as unhandled while the prefetch settles.
         resumePromise.catch(() => undefined)
 
-        // Keep both requests concurrent, but do not paint the REST result until
-        // the runtime resume has also settled. An eager prefetch paint followed
-        // by the runtime projection rebuilds large transcripts during resume.
         let prefetchedResult: { messages: SessionMessage[]; session_id?: string } | null = null
 
-        try {
-          if (prefetchPromise) {
-            prefetchedResult = await prefetchPromise
+        const paintPrefetchedTranscript = (result: { messages: SessionMessage[]; session_id?: string }) => {
+          if (!isCurrentResume() || !result.messages.length) {
+            return
           }
-        } catch {
-          // Non-fatal: gateway resume below can still hydrate the session.
+
+          const previousMessages = resumedSameSelectedSession
+            ? preserveLocalPendingTurnMessages($messages.get(), resumeStartMessages)
+            : $messages.get()
+
+          const painted = reconcileAuthoritativeMessages(result.messages, previousMessages)
+
+          if (!painted.length) {
+            return
+          }
+
+          prefetchedResult = result
+          prefetchApplied = true
+          prefetchedStoredSessionId = result.session_id || storedSessionId
+          localSnapshot = painted
+
+          if (!chatMessageArraysEquivalent($messages.get(), painted)) {
+            setMessages(painted)
+          }
         }
+
+        const prefetchHandled = prefetchPromise
+          ? prefetchPromise
+              .then(result => {
+                paintPrefetchedTranscript(result)
+
+                return result
+              })
+              .catch(() => null)
+          : Promise.resolve(null)
 
         const resumed = await resumePromise
 
@@ -948,14 +972,16 @@ export function useSessionActions({
           return
         }
 
-        if (prefetchedResult) {
-          const previousMessages = resumedSameSelectedSession
-            ? preserveLocalPendingTurnMessages($messages.get(), resumeStartMessages)
-            : $messages.get()
+        if (!prefetchApplied) {
+          try {
+            prefetchedResult = await prefetchHandled
+          } catch {
+            // Non-fatal: gateway resume below can still hydrate the session.
+          }
 
-          localSnapshot = reconcileAuthoritativeMessages(prefetchedResult.messages, previousMessages)
-          prefetchApplied = true
-          prefetchedStoredSessionId = prefetchedResult.session_id || storedSessionId
+          if (prefetchedResult) {
+            paintPrefetchedTranscript(prefetchedResult)
+          }
         }
 
         const currentMessages = $messages.get()
@@ -1022,7 +1048,12 @@ export function useSessionActions({
         // must not mask a lost transcript (a retry that reloads real history
         // is safer than surfacing the in-flight turn alone). Recovery only
         // ever appends, so this matches the final transcript's emptiness.
-        if (sessionShouldHaveTranscript(stored) && preferredMessages.length === 0) {
+        if (
+          (sessionShouldHaveTranscript(stored) ||
+            Boolean(prefetchedResult?.messages.length) ||
+            prefetchApplied) &&
+          preferredMessages.length === 0
+        ) {
           setActiveSessionId(null)
           activeSessionIdRef.current = null
           setResumeFailedSessionId(storedSessionId)

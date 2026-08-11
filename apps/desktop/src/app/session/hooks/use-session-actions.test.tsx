@@ -945,6 +945,64 @@ describe('resumeSession failure recovery', () => {
     expect($messages.get()).toEqual([])
   })
 
+  it('paints the REST prefetch before session.resume settles (#83729)', async () => {
+    const resumeGate = deferred<{
+      session_id: string
+      resumed: string
+      messages: []
+      info: Record<string, never>
+    }>()
+
+    vi.mocked(getSessionMessages).mockResolvedValue({
+      messages: [{ content: 'stored history', role: 'user', timestamp: 1 }],
+      session_id: 'stored-1'
+    } as never)
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'session.resume') {
+        return resumeGate.promise as never
+      }
+
+      return {} as never
+    })
+
+    let resume: ((storedSessionId: string, replaceRoute?: boolean) => Promise<unknown>) | null = null
+    render(<ResumeHarness onReady={r => (resume = r)} requestGateway={requestGateway} />)
+    await waitFor(() => expect(resume).not.toBeNull())
+
+    const resumeCall = resume!('stored-1', true)
+
+    await waitFor(() => expect($messages.get().length).toBeGreaterThan(0))
+
+    resumeGate.resolve({ session_id: 'runtime-1', resumed: 'stored-1', messages: [], info: {} })
+    await resumeCall
+
+    expect($messages.get().length).toBeGreaterThan(0)
+    expect($activeSessionId.get()).toBe('runtime-1')
+  })
+
+  it('keeps a REST-prefetched transcript when resume returns empty for a stale sidebar row (#83729)', async () => {
+    setSessions([storedSession({ message_count: 0 })])
+
+    vi.mocked(getSessionMessages).mockResolvedValue({
+      messages: [{ content: 'real history', role: 'user', timestamp: 1 }],
+      session_id: 'stored-1'
+    } as never)
+
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'session.resume') {
+        return { session_id: 'runtime-1', resumed: params?.session_id, messages: [], info: {} } as never
+      }
+
+      return {} as never
+    })
+
+    await runResume(requestGateway)
+
+    expect($messages.get().length).toBeGreaterThan(0)
+    expect($activeSessionId.get()).toBe('runtime-1')
+  })
+
   it('does not reuse an empty cached runtime view for a stored session with history', async () => {
     const runtimeIdByStoredSessionIdRef = {
       current: new Map([['stored-1', 'runtime-stale']])
