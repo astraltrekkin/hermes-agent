@@ -594,7 +594,7 @@ def test_unblock_invariant_recovery(kanban_home):
         assert kb.get_run(conn, leaked_run_id).ended_at is None
 
         # Unblock — the defensive recovery must close the leaked run.
-        assert kb.unblock_task(conn, tid) is True
+        assert kb.unblock_task(conn, tid) == "ok"
         task = kb.get_task(conn, tid)
         assert task.status == "ready"
         assert task.current_run_id is None

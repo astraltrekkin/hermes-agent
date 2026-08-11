@@ -649,6 +649,16 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         help="Return blocked/scheduled tasks to ready, or todo while parents remain open",
     )
     p_unblock.add_argument(
+        "--if-block-event-id",
+        type=int,
+        default=None,
+        dest="if_block_event_id",
+        help=(
+            "Compare-and-unblock: only mutate when the current canonical "
+            "blocked event id matches this value."
+        ),
+    )
+    p_unblock.add_argument(
         "--reason",
         default=None,
         help="Optional reason/note — recorded as a comment before unblocking. Quote multi-word reasons.",
@@ -2381,16 +2391,27 @@ def _cmd_unblock(args: argparse.Namespace) -> int:
     if reason is not None:
         reason = reason.strip() or None
     author = _profile_author() if reason else None
+    if_block_event_id = getattr(args, "if_block_event_id", None)
     failed: list[str] = []
     with kb.connect_closing() as conn:
         for tid in ids:
-            if reason:
-                kb.add_comment(conn, tid, author, f"UNBLOCK: {reason}")
-            if not kb.unblock_task(conn, tid):
+            outcome = kb.unblock_task(
+                conn, tid, if_block_event_id=if_block_event_id,
+            )
+            if outcome == "ok":
+                if reason:
+                    kb.add_comment(conn, tid, author, f"UNBLOCK: {reason}")
+                print(f"Unblocked {tid}" + (f": {reason}" if reason else ""))
+            elif outcome == "condition_mismatch":
+                failed.append(tid)
+                print(
+                    f"cannot unblock {tid}: block event id mismatch "
+                    f"(expected {if_block_event_id})",
+                    file=sys.stderr,
+                )
+            else:
                 failed.append(tid)
                 print(f"cannot unblock {tid} (not blocked/scheduled?)", file=sys.stderr)
-            else:
-                print(f"Unblocked {tid}" + (f": {reason}" if reason else ""))
     return 0 if not failed else 1
 
 

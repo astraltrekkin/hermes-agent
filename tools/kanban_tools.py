@@ -1616,6 +1616,12 @@ def _handle_unblock(args: dict, **kw) -> str:
     tid = args.get("task_id")
     if not tid:
         return tool_error("task_id is required")
+    if_block_event_id = args.get("if_block_event_id")
+    if if_block_event_id is not None:
+        try:
+            if_block_event_id = int(if_block_event_id)
+        except (TypeError, ValueError):
+            return tool_error("if_block_event_id must be an integer")
     ownership_err = _enforce_worker_task_ownership(str(tid))
     if ownership_err:
         return ownership_err
@@ -1623,8 +1629,15 @@ def _handle_unblock(args: dict, **kw) -> str:
     try:
         kb, conn = _connect(board=board)
         try:
-            ok = kb.unblock_task(conn, str(tid))
-            if not ok:
+            outcome = kb.unblock_task(
+                conn, str(tid), if_block_event_id=if_block_event_id,
+            )
+            if outcome == "condition_mismatch":
+                return tool_error(
+                    f"could not unblock {tid}: block event id mismatch "
+                    f"(expected {if_block_event_id})"
+                )
+            if outcome != "ok":
                 return tool_error(f"could not unblock {tid} (not blocked or unknown)")
             task = kb.get_task(conn, str(tid))
             return _ok(task_id=str(tid), status=task.status if task else None)
@@ -2309,9 +2322,11 @@ KANBAN_UNBLOCK_SCHEMA = {
     "name": "kanban_unblock",
     "description": (
         "Unblock a Kanban task. It moves to ready when all parents are done, "
-        "or todo while any parent remains open. Orchestrator-only — only "
-        "profiles with the kanban toolset can unblock routed work; "
-        "dispatcher-spawned task workers never see this tool."
+        "or todo while any parent remains open. Pass if_block_event_id for a "
+        "compare-and-unblock that fails closed when a newer block landed since "
+        "observation. Orchestrator-only — only profiles with the kanban toolset "
+        "can unblock routed work; dispatcher-spawned task workers never see "
+        "this tool."
     ),
     "parameters": {
         "type": "object",
@@ -2319,6 +2334,13 @@ KANBAN_UNBLOCK_SCHEMA = {
             "task_id": {
                 "type": "string",
                 "description": "Blocked task id to move to ready or parent-gated todo.",
+            },
+            "if_block_event_id": {
+                "type": "integer",
+                "description": (
+                    "Optional compare-and-unblock guard: only mutate when the "
+                    "current canonical blocked event id matches."
+                ),
             },
             "board": _board_schema_prop(),
         },

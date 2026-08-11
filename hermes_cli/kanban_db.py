@@ -87,7 +87,9 @@ import time
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Literal, Mapping, Optional
+
+UnblockOutcome = Literal["ok", "not_blocked", "condition_mismatch"]
 
 from hermes_cli.sqlite_util import add_column_if_missing as _add_column_if_missing
 from toolsets import get_toolset_names
@@ -6523,8 +6525,31 @@ def _landing_status_after_parents(conn: sqlite3.Connection, task_id: str) -> str
     return "todo" if undone_parents else "ready"
 
 
-def unblock_task(conn: sqlite3.Connection, task_id: str) -> bool:
+def latest_blocked_event_id(
+    conn: sqlite3.Connection, task_id: str,
+) -> Optional[int]:
+    """Return the id of the most recent worker/operator ``blocked`` event."""
+    row = conn.execute(
+        "SELECT id FROM task_events "
+        "WHERE task_id = ? AND kind = 'blocked' "
+        "ORDER BY id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def unblock_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    if_block_event_id: Optional[int] = None,
+) -> UnblockOutcome:
     """Transition ``blocked``/``scheduled`` to its safe resumable phase.
+
+    When ``if_block_event_id`` is set, the mutation is a compare-and-unblock:
+    the current canonical ``blocked`` event id must match before status changes.
+    A mismatch fails closed with ``"condition_mismatch"`` and emits no
+    ``unblocked`` event.
 
     Defensively closes any stale ``current_run_id`` pointer before flipping
     status. In the common path (``block_task`` closed the run already) this
@@ -6539,6 +6564,12 @@ def unblock_task(conn: sqlite3.Connection, task_id: str) -> bool:
             "SELECT status FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
+        if current is None or current["status"] not in ("blocked", "scheduled"):
+            return "not_blocked"
+        if if_block_event_id is not None:
+            canonical = latest_blocked_event_id(conn, task_id)
+            if canonical != if_block_event_id:
+                return "condition_mismatch"
         resume_status = (
             _resume_status_from_events(conn, task_id)
             if current and current["status"] == "blocked"
@@ -6572,7 +6603,7 @@ def unblock_task(conn: sqlite3.Connection, task_id: str) -> bool:
             (new_status, task_id),
         )
         if cur.rowcount != 1:
-            return False
+            return "not_blocked"
         _append_event(
             conn, task_id, "unblocked",
             (
@@ -6581,7 +6612,7 @@ def unblock_task(conn: sqlite3.Connection, task_id: str) -> bool:
                 else None
             ),
         )
-        return True
+        return "ok"
 
 
 def reopen_review_task(conn: sqlite3.Connection, task_id: str) -> bool:
