@@ -1,0 +1,8 @@
+{
+  "name": "hermes-agent",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "install": "uv sync --frozen || uv sync"
+}
