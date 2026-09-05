@@ -197,22 +197,58 @@ def unassign_runtime() -> None:
     save_config(config)
 
 
+def _probe_docker() -> tuple[str, str]:
+    import shutil
+
+    if not shutil.which("docker"):
+        return ("needs_setup", "Docker CLI not found — install Docker Desktop or docker-ce.")
+    try:
+        proc = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2,
+        )
+        if proc.returncode == 0:
+            return ("ready", "")
+        return ("needs_setup", "Docker daemon not reachable — start Docker and retry.")
+    except subprocess.TimeoutExpired:
+        return ("needs_setup", "Docker daemon not responding (timed out).")
+    except Exception as exc:
+        return ("unavailable", f"Docker probe failed: {exc}")
+
+
+def _probe_ssh(spec: dict) -> tuple[str, str]:
+    from hermes_cli.config import get_env_value
+
+    def _val(key: str, env_var: str) -> str:
+        value = spec.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+        try:
+            return (get_env_value(env_var) or "").strip()
+        except Exception:
+            return ""
+
+    host = _val("ssh_host", "TERMINAL_SSH_HOST")
+    user = _val("ssh_user", "TERMINAL_SSH_USER")
+    missing = [k for k, v in (("ssh_host", host), ("ssh_user", user)) if not v]
+    if missing:
+        return (
+            "needs_setup",
+            f"Set {', '.join(missing)} on the runtime (or TERMINAL_SSH_* in .env).",
+        )
+    return ("ready", f"{user}@{host}")
+
+
 def probe_spec(spec: dict) -> tuple[str, str]:
     """Connectivity probe without starting a bot or creating a sandbox."""
-    from hermes_cli.web_routers.tools import (
-        _probe_docker_backend,
-        _probe_ssh_backend,
-        _probe_terminal_backend,
-    )
-
     kind = str(spec.get("kind") or "local").strip().lower()
     if kind == "local":
         return ("ready", "local host")
     if kind == "docker":
-        return _probe_docker_backend(spec)
+        return _probe_docker()
     if kind == "ssh":
-        return _probe_ssh_backend(spec)
-    return _probe_terminal_backend(kind, spec)
+        return _probe_ssh(spec)
+    return ("unavailable", f"Unsupported runtime kind {kind!r} for this milestone.")
 
 
 def assigned_runtime_block() -> dict[str, str] | None:
@@ -291,15 +327,23 @@ def list_profile_containers() -> list[dict[str, str]]:
     return rows
 
 
-def stop_profile_runtime(*, force_remove: bool = True) -> dict[str, Any]:
-    """Stop this profile's execution env only — never sibling bots or unlabeled containers."""
+def _cleanup_vm(task_id: str, *, force_remove: bool = False) -> None:
     from tools.terminal_tool_lifecycle import cleanup_vm
 
-    stopped = []
-    cleanup_vm("default", force_remove=force_remove)
+    cleanup_vm(task_id, force_remove=force_remove)
+
+
+def _find_docker() -> str | None:
     from tools.environments.docker import find_docker
 
-    docker = find_docker()
+    return find_docker()
+
+
+def stop_profile_runtime(*, force_remove: bool = True) -> dict[str, Any]:
+    """Stop this profile's execution env only — never sibling bots or unlabeled containers."""
+    stopped = []
+    _cleanup_vm("default", force_remove=force_remove)
+    docker = _find_docker()
     for row in list_profile_containers():
         cid = row["id"]
         if docker:

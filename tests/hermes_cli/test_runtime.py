@@ -117,8 +117,8 @@ def test_test_and_stop_stay_on_this_profile(tmp_path, monkeypatch):
         "hermes_cli.runtime.list_profile_containers",
         lambda: [{"id": "abc123deadbeef", "status": "Up", "image": "img", "name": "h", "profile": "default"}],
     )
-    monkeypatch.setattr("tools.environments.docker.find_docker", lambda: None)
-    monkeypatch.setattr("tools.terminal_tool_lifecycle.cleanup_vm", _fake_cleanup)
+    monkeypatch.setattr("hermes_cli.runtime._find_docker", lambda: None)
+    monkeypatch.setattr("hermes_cli.runtime._cleanup_vm", _fake_cleanup)
 
     assert runtime_command(_args(runtime_action="stop")) == 1
     result = stop_profile_runtime(force_remove=True)
