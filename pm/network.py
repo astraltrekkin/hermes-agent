@@ -15,6 +15,7 @@ from email.utils import parsedate_to_datetime
 from typing import Callable, TypeVar
 
 _T = TypeVar("_T")
+_Conn = TypeVar("_Conn", bound=http.client.HTTPConnection)
 _ATTEMPTS = 4
 _MAX_DELAY = 30.0
 _HTTP_RETRY = frozenset({408, 429, 500, 502, 503, 504})
@@ -24,6 +25,30 @@ _NETWORK_ERRNOS = frozenset({
     errno.ENETDOWN, errno.ENETRESET, errno.ENETUNREACH,
     errno.EHOSTUNREACH, errno.EPIPE, errno.ETIMEDOUT,
 })
+
+
+def without_connection_close(http_connection_class: type[_Conn]) -> type[_Conn]:
+    """Stop urllib from forcing ``Connection: close`` on this connection class.
+
+    ``urllib.request.AbstractHTTPHandler.do_open`` always injects that header
+    because ``addinfourl`` cannot reuse a socket. Some CDN edges in front of
+    large asset hosts RST the TLS stream mid-body when they see that
+    fingerprint (#142463). Each pm download is single-shot anyway, so omitting
+    the header is safe and matches the HTTP/1.1 framing curl uses by default.
+    """
+
+    class _NoConnectionClose(http_connection_class):  # type: ignore[valid-type,misc]
+        def request(self, method, url, body=None, headers=None, *, encode_chunked=False):
+            headers = {
+                k: v for k, v in (headers or {}).items() if k.lower() != "connection"
+            }
+            return super().request(
+                method, url, body, headers, encode_chunked=encode_chunked,
+            )
+
+    _NoConnectionClose.__name__ = http_connection_class.__name__
+    _NoConnectionClose.__qualname__ = http_connection_class.__qualname__
+    return _NoConnectionClose  # type: ignore[return-value]
 
 
 def is_transient(exc: Exception) -> bool:

@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from pm.network import edge_block, is_transient, retry_network
+from pm.network import edge_block, is_transient, retry_network, without_connection_close
 
 # GitHub's release-asset CDN (release-assets.githubusercontent.com, which
 # TUR's pool 302s to) 403s unknown tool UAs from CI runner IP ranges --
@@ -76,8 +76,28 @@ def _https_context() -> ssl.SSLContext:
     return context
 
 
+class _HttpHandler(urllib.request.HTTPHandler):
+    """Loopback test downloads; omit urllib's forced ``Connection: close``."""
+
+    def http_open(self, req):
+        return self.do_open(without_connection_close(http.client.HTTPConnection), req)
+
+
+class _HttpsHandler(urllib.request.HTTPSHandler):
+    """Asset CDN downloads; omit urllib's forced ``Connection: close`` (#142463)."""
+
+    def https_open(self, req):
+        return self.do_open(
+            without_connection_close(http.client.HTTPSConnection),
+            req,
+            context=self._context,
+        )
+
+
 _OPENER = urllib.request.build_opener(
-    _HttpsRedirectHandler(), urllib.request.HTTPSHandler(context=_https_context())
+    _HttpsRedirectHandler(),
+    _HttpHandler(),
+    _HttpsHandler(context=_https_context()),
 )
 
 
